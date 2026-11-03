@@ -24,7 +24,28 @@ DB_PATH = os.path.join(
     "sales.db"
 )
 
-MODEL_NAME = "llama3.2"
+# =========================
+# OLLAMA CLOUD CONFIGURATION
+# =========================
+MODEL_NAME = "gpt-oss:20b-cloud"
+
+
+@st.cache_resource
+def get_ollama_client():
+    """Create a reusable client for Ollama Cloud."""
+    api_key = st.secrets.get("OLLAMA_API_KEY", "")
+
+    if not api_key:
+        raise RuntimeError(
+            "OLLAMA_API_KEY missing hai. "
+            "Streamlit Cloud ke Secrets check karo."
+        )
+
+    return ollama.Client(
+        host="https://ollama.com",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
 
 # =========================
 # STYLING
@@ -172,7 +193,6 @@ def init_query_history():
     """
     Query history table ko create karta hai agar
     woh pehle se database mein maujood nahi hai.
-    Existing sales tables ko change nahi karta.
     """
     conn = get_connection(read_only=False)
 
@@ -201,10 +221,7 @@ def save_query_history(
     status,
     error_message=None
 ):
-    """
-    User ka question, generated SQL, result status
-    aur error ko permanently save karta hai.
-    """
+    """Save a query attempt in the database."""
     conn = get_connection(read_only=False)
 
     try:
@@ -229,9 +246,7 @@ def save_query_history(
 
 
 def get_query_history(limit=50):
-    """
-    Latest saved query attempts return karta hai.
-    """
+    """Return the latest saved query attempts."""
     return read_sql("""
         SELECT
             id,
@@ -266,12 +281,7 @@ def load_sales_data():
     """)
 
 
-def apply_filters(
-    data,
-    selected_product,
-    start_date,
-    end_date
-):
+def apply_filters(data, selected_product, start_date, end_date):
     filtered = data.copy()
 
     if selected_product != "All Products":
@@ -302,9 +312,7 @@ def format_currency(value):
 # =========================
 def show_sales_charts(data):
     if data.empty:
-        st.info(
-            "Selected filters ke liye data nahi mila."
-        )
+        st.info("Selected filters ke liye data nahi mila.")
         return
 
     left, right = st.columns(2)
@@ -313,31 +321,16 @@ def show_sales_charts(data):
         st.subheader("💰 Revenue by Product")
 
         revenue = (
-            data.groupby(
-                "product_name",
-                as_index=False
-            )["revenue"]
+            data.groupby("product_name", as_index=False)["revenue"]
             .sum()
-            .sort_values(
-                "revenue",
-                ascending=False
-            )
+            .sort_values("revenue", ascending=False)
         )
 
         fig, ax = plt.subplots(figsize=(7, 4))
-
-        ax.bar(
-            revenue["product_name"],
-            revenue["revenue"]
-        )
-
+        ax.bar(revenue["product_name"], revenue["revenue"])
         ax.set_ylabel("Revenue (₹)")
         ax.set_xlabel("Product")
-        ax.tick_params(
-            axis="x",
-            rotation=20
-        )
-
+        ax.tick_params(axis="x", rotation=20)
         fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
@@ -346,31 +339,16 @@ def show_sales_charts(data):
         st.subheader("📦 Quantity Sold by Product")
 
         quantity = (
-            data.groupby(
-                "product_name",
-                as_index=False
-            )["quantity"]
+            data.groupby("product_name", as_index=False)["quantity"]
             .sum()
-            .sort_values(
-                "quantity",
-                ascending=False
-            )
+            .sort_values("quantity", ascending=False)
         )
 
         fig, ax = plt.subplots(figsize=(7, 4))
-
-        ax.bar(
-            quantity["product_name"],
-            quantity["quantity"]
-        )
-
+        ax.bar(quantity["product_name"], quantity["quantity"])
         ax.set_ylabel("Units Sold")
         ax.set_xlabel("Product")
-        ax.tick_params(
-            axis="x",
-            rotation=20
-        )
-
+        ax.tick_params(axis="x", rotation=20)
         fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
@@ -378,15 +356,11 @@ def show_sales_charts(data):
     st.subheader("📈 Revenue Trend by Date")
 
     trend_data = data.copy()
-
     trend_data["parsed_date"] = pd.to_datetime(
         trend_data["order_date"],
         errors="coerce"
     )
-
-    trend_data = trend_data.dropna(
-        subset=["parsed_date"]
-    )
+    trend_data = trend_data.dropna(subset=["parsed_date"])
 
     if not trend_data.empty:
         trend = (
@@ -398,20 +372,14 @@ def show_sales_charts(data):
         )
 
         fig, ax = plt.subplots(figsize=(11, 4))
-
         ax.plot(
             [str(day) for day in trend.index],
             trend.values,
             marker="o"
         )
-
         ax.set_ylabel("Revenue (₹)")
         ax.set_xlabel("Order Date")
-        ax.tick_params(
-            axis="x",
-            rotation=35
-        )
-
+        ax.tick_params(axis="x", rotation=35)
         fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
@@ -419,15 +387,12 @@ def show_sales_charts(data):
         st.info(
             "Valid order dates nahi hain, isliye trend nahi dikh sakta."
         )
-        
+
+
 # =========================
 # AI TEXT-TO-SQL
 # =========================
-def generate_sql(
-    question,
-    correction_error=None,
-    previous_sql=None
-):
+def generate_sql(question, correction_error=None, previous_sql=None):
     schema = """
     Table: products
       product_id INTEGER
@@ -485,12 +450,12 @@ Question: {question}
 Return only SQL.
 """
 
-    response = ollama.generate(
+    response = get_ollama_client().generate(
         model=MODEL_NAME,
         prompt=prompt
     )
 
-    sql = response["response"].strip()
+    sql = response.response.strip()
 
     sql = re.sub(
         r"^```(?:sql)?\s*",
@@ -499,37 +464,24 @@ Return only SQL.
         flags=re.IGNORECASE
     )
 
-    sql = re.sub(
-        r"\s*```$",
-        "",
-        sql
-    )
+    sql = re.sub(r"\s*```$", "", sql)
 
     return sql.strip()
 
 
 def validate_sql(sql):
     if not sql or not sql.strip():
-        raise ValueError(
-            "AI ne empty SQL query return ki."
-        )
+        raise ValueError("AI ne empty SQL query return ki.")
 
-    statements = sqlglot.parse(
-        sql,
-        read="sqlite"
-    )
+    statements = sqlglot.parse(sql, read="sqlite")
 
     if len(statements) != 1 or statements[0] is None:
-        raise ValueError(
-            "Sirf ek SQL statement allowed hai."
-        )
+        raise ValueError("Sirf ek SQL statement allowed hai.")
 
     parsed = statements[0]
 
     if parsed.key.upper() != "SELECT":
-        raise ValueError(
-            "Sirf SELECT queries allowed hain."
-        )
+        raise ValueError("Sirf SELECT queries allowed hain.")
 
     forbidden = {
         "INSERT",
@@ -554,10 +506,7 @@ def validate_sql(sql):
             )
 
     for table in parsed.find_all(sqlglot.exp.Table):
-        if table.name.lower() not in {
-            "products",
-            "orders"
-        }:
+        if table.name.lower() not in {"products", "orders"}:
             raise ValueError(
                 f"Unknown table allowed nahi hai: {table.name}"
             )
@@ -570,11 +519,7 @@ def run_read_only_query(sql):
 
     try:
         conn.execute("PRAGMA query_only = ON")
-
-        return pd.read_sql_query(
-            sql,
-            conn
-        )
+        return pd.read_sql_query(sql, conn)
     finally:
         conn.close()
 
@@ -601,11 +546,7 @@ def analyze_question(question):
             previous_sql = locals().get("sql")
 
             if attempt == 1:
-                return (
-                    previous_sql,
-                    None,
-                    correction_error
-                )
+                return previous_sql, None, correction_error
 
     return None, None, "Query complete nahi hui."
 
@@ -614,9 +555,7 @@ def generate_insights(question, sql, result):
     if result is None or result.empty:
         return "Is question ke liye koi result nahi mila."
 
-    preview = result.head(10).to_string(
-        index=False
-    )
+    preview = result.head(10).to_string(index=False)
 
     prompt = f"""
 You are a sales data analyst.
@@ -631,12 +570,12 @@ Result:
 {preview}
 """
 
-    response = ollama.generate(
+    response = get_ollama_client().generate(
         model=MODEL_NAME,
         prompt=prompt
     )
 
-    return response["response"].strip()
+    return response.response.strip()
 
 
 # =========================
@@ -670,18 +609,13 @@ with st.sidebar:
         init_query_history()
         all_sales = load_sales_data()
     except Exception as exc:
-        st.error(
-            f"Database load error: {exc}"
-        )
+        st.error(f"Database load error: {exc}")
         st.stop()
 
     st.subheader("🔎 Dashboard Filters")
 
     products = ["All Products"] + sorted(
-        all_sales["product_name"]
-        .dropna()
-        .unique()
-        .tolist()
+        all_sales["product_name"].dropna().unique().tolist()
     )
 
     selected_product = st.selectbox(
@@ -724,7 +658,7 @@ with st.sidebar:
         start_date, end_date = end_date, start_date
 
     st.divider()
-    st.caption("Model: Llama 3.2")
+    st.caption(f"Model: {MODEL_NAME}")
     st.caption("Database: sales.db")
 
 
@@ -762,25 +696,10 @@ st.subheader("📌 Key Performance Indicators")
 
 k1, k2, k3, k4 = st.columns(4)
 
-k1.metric(
-    "💰 Total Revenue",
-    format_currency(total_revenue)
-)
-
-k2.metric(
-    "🧾 Total Orders",
-    f"{total_orders:,}"
-)
-
-k3.metric(
-    "📦 Units Sold",
-    f"{total_quantity:,.0f}"
-)
-
-k4.metric(
-    "🏷️ Products Sold",
-    f"{products_sold:,}"
-)
+k1.metric("💰 Total Revenue", format_currency(total_revenue))
+k2.metric("🧾 Total Orders", f"{total_orders:,}")
+k3.metric("📦 Units Sold", f"{total_quantity:,.0f}")
+k4.metric("🏷️ Products Sold", f"{products_sold:,}")
 
 st.caption(
     f"Filters: {selected_product} | "
@@ -814,9 +733,7 @@ show_sales_charts(filtered_data)
 st.subheader("🧾 Recent Orders")
 
 if filtered_data.empty:
-    st.info(
-        "Selected filters ke liye orders nahi mile."
-    )
+    st.info("Selected filters ke liye orders nahi mile.")
 else:
     recent = filtered_data.copy()
 
@@ -840,9 +757,7 @@ else:
         "revenue"
     ]
 
-    recent_display = recent[
-        display_columns
-    ].head(20).copy()
+    recent_display = recent[display_columns].head(20).copy()
 
     recent_display = recent_display.rename(
         columns={
@@ -861,9 +776,7 @@ else:
         hide_index=True
     )
 
-    csv_bytes = filtered_data.to_csv(
-        index=False
-    ).encode("utf-8")
+    csv_bytes = filtered_data.to_csv(index=False).encode("utf-8")
 
     st.download_button(
         "📥 Download Filtered Sales CSV",
@@ -871,6 +784,7 @@ else:
         file_name="filtered_sales.csv",
         mime="text/csv"
     )
+
 
 st.divider()
 
@@ -916,16 +830,12 @@ if st.button(
     use_container_width=True
 ):
     if not question.strip():
-        st.warning(
-            "Pehle apna question enter karo."
-        )
+        st.warning("Pehle apna question enter karo.")
     else:
         with st.spinner(
             "AI SQL generate aur execute kar raha hai..."
         ):
-            sql, result, error = analyze_question(
-                question
-            )
+            sql, result, error = analyze_question(question)
 
         # Save every analysis attempt to permanent history.
         try:
@@ -942,15 +852,10 @@ if st.button(
             )
 
         if error:
-            st.error(
-                f"Analysis failed: {error}"
-            )
+            st.error(f"Analysis failed: {error}")
 
             if sql:
-                st.code(
-                    sql,
-                    language="sql"
-                )
+                st.code(sql, language="sql")
         else:
             st.session_state.analysis_result = {
                 "question": question,
@@ -968,11 +873,7 @@ if st.session_state.analysis_result:
     analysis = st.session_state.analysis_result
 
     st.subheader("🧠 Generated SQL")
-
-    st.code(
-        analysis["sql"],
-        language="sql"
-    )
+    st.code(analysis["sql"], language="sql")
 
     st.subheader("📋 Query Results")
 
@@ -1001,8 +902,7 @@ if st.session_state.analysis_result:
 
     if not result_data.empty:
         numeric_columns = (
-            result_data
-            .select_dtypes(include="number")
+            result_data.select_dtypes(include="number")
             .columns.tolist()
         )
 
@@ -1025,17 +925,12 @@ if st.session_state.analysis_result:
 
             if label_columns:
                 label_column = label_columns[0]
-
-                chart_data = chart_data.set_index(
-                    label_column
-                )
-
+                chart_data = chart_data.set_index(label_column)
                 chart_series = chart_data[value_column]
                 x_label = label_column
             else:
                 chart_series = (
-                    result_data[value_column]
-                    .reset_index(drop=True)
+                    result_data[value_column].reset_index(drop=True)
                 )
 
                 chart_series.index = [
@@ -1049,17 +944,11 @@ if st.session_state.analysis_result:
 
             fig, ax = plt.subplots(figsize=(9, 4))
 
-            chart_series.plot(
-                kind="bar",
-                ax=ax
-            )
+            chart_series.plot(kind="bar", ax=ax)
 
             ax.set_ylabel(value_column)
             ax.set_xlabel(x_label)
-            ax.tick_params(
-                axis="x",
-                rotation=20
-            )
+            ax.tick_params(axis="x", rotation=20)
 
             fig.tight_layout()
 
@@ -1093,9 +982,7 @@ if st.session_state.analysis_result:
         "✨ Generate AI Insights",
         key="generate_insights"
     ):
-        with st.spinner(
-            "AI result analyze kar raha hai..."
-        ):
+        with st.spinner("AI result analyze kar raha hai..."):
             try:
                 insights = generate_insights(
                     analysis["question"],
@@ -1106,15 +993,11 @@ if st.session_state.analysis_result:
                 st.session_state.last_insights = insights
 
             except Exception as exc:
-                st.error(
-                    f"Insights generate nahi hue: {exc}"
-                )
+                st.error(f"Insights generate nahi hue: {exc}")
 
     if st.session_state.last_insights:
         st.subheader("✨ AI Insights")
-        st.write(
-            st.session_state.last_insights
-        )
+        st.write(st.session_state.last_insights)
 
 
 # ============================
@@ -1147,24 +1030,11 @@ try:
 
         h1, h2, h3 = st.columns(3)
 
-        h1.metric(
-            "📚 Saved Attempts",
-            total_saved
-        )
+        h1.metric("📚 Saved Attempts", total_saved)
+        h2.metric("✅ Successful", successful_queries)
+        h3.metric("❌ Failed", failed_queries)
 
-        h2.metric(
-            "✅ Successful",
-            successful_queries
-        )
-
-        h3.metric(
-            "❌ Failed",
-            failed_queries
-        )
-
-        # ============================
         # HISTORY TABLE
-        # ============================
         st.subheader("📋 Saved Questions")
 
         history_display = history_data[
@@ -1183,12 +1053,10 @@ try:
         st.dataframe(
             history_display,
             use_container_width=True,
-            hide_index=True,
+            hide_index=True
         )
 
-        # ============================
         # VIEW AND RERUN HISTORY
-        # ============================
         st.subheader("🔍 View and Rerun Previous Queries")
 
         for _, history_row in history_data.iterrows():
@@ -1221,35 +1089,27 @@ try:
                 st.markdown("**Generated SQL:**")
 
                 if isinstance(saved_sql, str) and saved_sql.strip():
-                    st.code(
-                        saved_sql,
-                        language="sql"
-                    )
+                    st.code(saved_sql, language="sql")
 
                     if st.button(
                         "🔄 Run Again",
-                        key=f"rerun_history_{history_id}",
+                        key=f"rerun_history_{history_id}"
                     ):
                         try:
-                            # Validate again before execution.
+                            # Validate before execution.
                             safe_sql = validate_sql(saved_sql)
 
-                            rerun_result = run_read_only_query(
-                                safe_sql
-                            )
+                            rerun_result = run_read_only_query(safe_sql)
 
                             # Save rerun as a new history attempt.
                             save_query_history(
                                 question=history_question,
                                 sql_query=safe_sql,
                                 status="Success",
-                                error_message=None,
+                                error_message=None
                             )
 
-                            st.success(
-                                "Query successfully execute hui!"
-                            )
-
+                            st.success("Query successfully execute hui!")
                             st.markdown("**New Result:**")
 
                             if rerun_result.empty:
@@ -1260,7 +1120,7 @@ try:
                                 st.dataframe(
                                     rerun_result,
                                     use_container_width=True,
-                                    hide_index=True,
+                                    hide_index=True
                                 )
 
                                 result_csv = rerun_result.to_csv(
@@ -1272,7 +1132,7 @@ try:
                                     data=result_csv,
                                     file_name=f"query_result_{history_id}.csv",
                                     mime="text/csv",
-                                    key=f"rerun_csv_{history_id}",
+                                    key=f"rerun_csv_{history_id}"
                                 )
 
                         except Exception as rerun_error:
@@ -1283,7 +1143,7 @@ try:
                                     question=history_question,
                                     sql_query=saved_sql,
                                     status="Failed",
-                                    error_message=error_text,
+                                    error_message=error_text
                                 )
                             except Exception as save_error:
                                 st.warning(
@@ -1300,18 +1160,14 @@ try:
                         "Is attempt ke liye SQL query save nahi hui."
                     )
 
-                # ============================
                 # ERROR DETAILS
-                # ============================
                 saved_error = history_row["error_message"]
 
                 if isinstance(saved_error, str) and saved_error.strip():
                     st.markdown("**Error Details:**")
                     st.error(saved_error)
 
-        # ============================
         # EXPORT HISTORY
-        # ============================
         st.divider()
 
         history_csv = history_data.to_csv(
@@ -1323,7 +1179,7 @@ try:
             data=history_csv,
             file_name="query_history.csv",
             mime="text/csv",
-            key="download_query_history_csv",
+            key="download_query_history_csv"
         )
 
 except Exception as history_error:
