@@ -4,7 +4,7 @@ import io
 import os
 import pandas as pd
 import streamlit as st
-import ollama
+from google import genai
 import sqlglot
 import matplotlib.pyplot as plt
 from datetime import date, timedelta
@@ -25,26 +25,23 @@ DB_PATH = os.path.join(
 )
 
 # =========================
-# OLLAMA CLOUD CONFIGURATION
+# GEMINI API CONFIGURATION
 # =========================
-MODEL_NAME = "gpt-oss:20b-cloud"
+MODEL_NAME = "gemini-3.8-flash"
 
 
 @st.cache_resource
-def get_ollama_client():
-    """Create a reusable client for Ollama Cloud."""
-    api_key = st.secrets.get("OLLAMA_API_KEY", "")
+def get_gemini_client():
+    """Create a reusable Gemini API client."""
+    api_key = st.secrets.get("GEMINI_API_KEY", "")
 
     if not api_key:
         raise RuntimeError(
-            "OLLAMA_API_KEY missing hai. "
-            "Streamlit Cloud ke Secrets check karo."
+            "GEMINI_API_KEY missing hai. "
+            ".streamlit/secrets.toml check karo."
         )
 
-    return ollama.Client(
-        host="https://ollama.com",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
+    return genai.Client(api_key=api_key)
 
 
 # =========================
@@ -184,9 +181,7 @@ def check_database():
             "orders table ke columns expected format se match nahi karte."
         )
         st.stop()
-
-
-# =========================
+        # =========================
 # PERMANENT QUERY HISTORY
 # =========================
 def init_query_history():
@@ -387,8 +382,6 @@ def show_sales_charts(data):
         st.info(
             "Valid order dates nahi hain, isliye trend nahi dikh sakta."
         )
-
-
 # =========================
 # AI TEXT-TO-SQL
 # =========================
@@ -450,12 +443,12 @@ Question: {question}
 Return only SQL.
 """
 
-    response = get_ollama_client().generate(
+    response = get_gemini_client().models.generate_content(
         model=MODEL_NAME,
-        prompt=prompt
+        contents=prompt
     )
 
-    sql = response.response.strip()
+    sql = (response.text or "").strip()
 
     sql = re.sub(
         r"^```(?:sql)?\s*",
@@ -570,14 +563,12 @@ Result:
 {preview}
 """
 
-    response = get_ollama_client().generate(
+    response = get_gemini_client().models.generate_content(
         model=MODEL_NAME,
-        prompt=prompt
+        contents=prompt
     )
 
-    return response.response.strip()
-
-
+    return (response.text or "").strip()
 # =========================
 # SESSION STATE
 # =========================
@@ -787,7 +778,6 @@ else:
 
 
 st.divider()
-
 # =========================
 # AI TEXT-TO-SQL ANALYST
 # =========================
@@ -998,9 +988,7 @@ if st.session_state.analysis_result:
     if st.session_state.last_insights:
         st.subheader("✨ AI Insights")
         st.write(st.session_state.last_insights)
-
-
-# ============================
+        # ============================
 # PERMANENT QUERY HISTORY UI
 # ============================
 st.divider()
