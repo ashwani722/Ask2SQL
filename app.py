@@ -1,4 +1,5 @@
 import sqlite3
+import time
 import re
 import io
 import os
@@ -28,6 +29,7 @@ DB_PATH = os.path.join(
 # GEMINI API CONFIGURATION
 # =========================
 MODEL_NAME = "gemini-3.8-flash"
+FALLBACK_MODEL_NAME = "gemini-3.6-flash"
 
 
 @st.cache_resource
@@ -42,6 +44,72 @@ def get_gemini_client():
         )
 
     return genai.Client(api_key=api_key)
+
+
+def generate_gemini_text(prompt):
+    """
+    Generate text with the primary Gemini model.
+    If Google returns a temporary availability/overload error,
+    try the configured fallback model.
+    The Google Gen AI SDK also has built-in retry handling for
+    transient server errors.
+    """
+    client = get_gemini_client()
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt
+        )
+        text = (response.text or "").strip()
+        if not text:
+            raise RuntimeError(
+                f"{MODEL_NAME} ne empty response return kiya."
+            )
+        return text
+
+    except Exception as primary_error:
+        error_text = str(primary_error).upper()
+        temporary_error = any(
+            marker in error_text
+            for marker in (
+                "503",
+                "UNAVAILABLE",
+                "429",
+                "RESOURCE_EXHAUSTED",
+                "500",
+                "502",
+                "504",
+                "INTERNAL",
+            )
+        )
+
+        # Don't switch models for invalid keys, missing permissions,
+        # invalid requests, or other non-temporary errors.
+        if not temporary_error:
+            raise
+
+        try:
+            response = client.models.generate_content(
+                model=FALLBACK_MODEL_NAME,
+                contents=prompt
+            )
+            text = (response.text or "").strip()
+            if not text:
+                raise RuntimeError(
+                    f"{FALLBACK_MODEL_NAME} ne empty response return kiya."
+                )
+            return text
+
+        except Exception as fallback_error:
+            raise RuntimeError(
+                "Gemini ke primary aur fallback dono models se response "
+                "nahi mila. "
+                f"Primary ({MODEL_NAME}): {primary_error}. "
+                f"Fallback ({FALLBACK_MODEL_NAME}): {fallback_error}. "
+                "Thodi der baad dobara try karo ya Google AI Studio mein "
+                "available model IDs check karo."
+            ) from fallback_error
 
 
 # =========================
@@ -443,12 +511,7 @@ Question: {question}
 Return only SQL.
 """
 
-    response = get_gemini_client().models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt
-    )
-
-    sql = (response.text or "").strip()
+    sql = generate_gemini_text(prompt)
 
     sql = re.sub(
         r"^```(?:sql)?\s*",
@@ -563,12 +626,7 @@ Result:
 {preview}
 """
 
-    response = get_gemini_client().models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt
-    )
-
-    return (response.text or "").strip()
+    return generate_gemini_text(prompt)
 # =========================
 # SESSION STATE
 # =========================
@@ -649,7 +707,8 @@ with st.sidebar:
         start_date, end_date = end_date, start_date
 
     st.divider()
-    st.caption(f"Model: {MODEL_NAME}")
+    st.caption(f"Primary model: {MODEL_NAME}")
+    st.caption(f"Fallback model: {FALLBACK_MODEL_NAME}")
     st.caption("Database: sales.db")
 
 
